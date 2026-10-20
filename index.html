@@ -1,0 +1,650 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painel de Atividades</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="wrap">
+  <header class="head">
+    <div class="head-title">
+      <p class="eyebrow" id="dateSub">Hoje</p>
+      <h1 id="dateTitle">Atividades do dia</h1>
+    </div>
+    <nav class="nav" aria-label="Navegar entre dias">
+      <button class="btn icon" id="prev" type="button" aria-label="Dia anterior">‹</button>
+      <button class="btn" id="todayBtn" type="button" hidden>Ir para hoje</button>
+      <button class="btn icon" id="next" type="button" aria-label="Próximo dia">›</button>
+    </nav>
+  </header>
+
+  <div class="progress">
+    <div class="bar" role="progressbar" aria-label="Progresso do dia" aria-valuemin="0" aria-valuemax="100" id="barWrap"><i id="barFill"></i></div>
+    <span class="progress-text" id="progressText">0 de 0 realizadas</span>
+  </div>
+
+  <div class="layout">
+    <aside class="side" aria-label="Calendário">
+      <section class="cal">
+        <div class="cal-head">
+          <button class="btn icon" id="calPrev" type="button" aria-label="Mês anterior">‹</button>
+          <h2 id="calTitle">Mês</h2>
+          <button class="btn icon" id="calNext" type="button" aria-label="Próximo mês">›</button>
+        </div>
+        <div class="cal-grid" id="calGrid"></div>
+        <ul class="legend">
+          <li><span class="bd">3</span> atividades abertas</li>
+          <li><span class="bd late">2</span> atrasadas</li>
+          <li><span class="bd ok">✓</span> tudo feito</li>
+          <li><span class="rd"></span> lembrete</li>
+        </ul>
+      </section>
+    </aside>
+
+    <div class="main">
+      <form class="card-box" id="addForm" autocomplete="off">
+        <div class="box-head"><h2>Nova atividade</h2><span class="count" id="addDay"></span></div>
+        <div class="row">
+          <div class="f grow">
+            <label for="newText">O que precisa ser feito</label>
+            <input class="field" id="newText" type="text" maxlength="200" placeholder="Ex.: Emitir CT-e da carga 1482" required>
+          </div>
+        </div>
+        <div class="row">
+          <div class="f sel"><label for="newCat">Setor</label><select class="field" id="newCat"></select></div>
+          <div class="f sel"><label for="newPrio">Prioridade</label>
+            <select class="field" id="newPrio">
+              <option value="alta">Alta</option>
+              <option value="media" selected>Média</option>
+              <option value="baixa">Baixa</option>
+            </select>
+          </div>
+          <div class="f sel"><label for="newRepeat">Repetir</label>
+            <select class="field" id="newRepeat">
+              <option value="none" selected>Não repetir</option>
+              <option value="daily">Todos os dias</option>
+              <option value="weekdays">Dias úteis (seg a sex)</option>
+              <option value="weekly">Toda semana</option>
+              <option value="monthly">Todo mês</option>
+            </select>
+          </div>
+          <button class="btn primary" type="submit">Adicionar atividade</button>
+        </div>
+        <p class="note" id="addNote"></p>
+      </form>
+
+      <section class="card-box" aria-label="Lembretes do dia">
+        <div class="box-head"><h2 id="remTitle">Lembretes</h2><span class="count" id="remCount">0 abertos</span></div>
+        <ul class="rem-list" id="remList"></ul>
+        <form id="remForm" autocomplete="off" style="display:flex;flex-direction:column;gap:10px">
+          <div class="row">
+            <div class="f grow"><label for="remText">Novo lembrete</label><input class="field" id="remText" type="text" maxlength="160" placeholder="Ex.: Ligar para o cliente da carga 1482" required></div>
+            <div class="f"><label for="remTime">Horário</label><input class="field" id="remTime" type="time"></div>
+          </div>
+          <div class="row" id="attachRow">
+            <button class="btn" id="pickBtn" type="button">Anexar arquivos</button>
+            <div class="picked" id="picked"></div>
+            <button class="btn primary" id="remSubmit" type="submit" style="margin-left:auto">Adicionar lembrete</button>
+          </div>
+          <p class="attach-help" id="attachHelp">Anexos aceitos: PDF, imagens (PNG, JPG, GIF, WEBP, SVG), vídeo (MP4, WEBM), CSV, TXT, MD e JSON, até 20 MB cada.</p>
+        </form>
+      </section>
+
+      <div id="carry" class="carry" hidden>
+        <p id="carryText"></p>
+        <button class="btn" id="carryBtn" type="button">Trazer para hoje</button>
+      </div>
+
+      <section aria-label="Atividades do dia" style="display:flex;flex-direction:column;gap:12px">
+        <div class="sec-title"><h2 id="secTitle">Atividades</h2></div>
+        <div class="chips" id="filters" role="group" aria-label="Filtrar por setor"></div>
+        <div class="board" id="board"></div>
+      </section>
+    </div>
+  </div>
+
+  <footer class="foot">
+    <span id="saveNote">Carregando…</span>
+    <span id="errNote" class="err" role="status"></span>
+  </footer>
+</div>
+<div class="toast" id="toast" role="status" hidden></div>
+
+<script>
+(function () {
+  var SECTORS = ["Fiscal", "Financeiro", "T1", "T2", "Industrial", "Terceiros", "CCO", "Outros"];
+  var PRIO = { alta: { label: "Alta", rank: 0 }, media: { label: "Média", rank: 1 }, baixa: { label: "Baixa", rank: 2 } };
+  var FREQ = { daily: "Todos os dias", weekdays: "Dias úteis", weekly: "Toda semana", monthly: "Todo mês" };
+  var COLS = [
+    { key: "todo", title: "A fazer", empty: "Nada pendente." },
+    { key: "doing", title: "Em andamento", empty: "Nenhuma em andamento." },
+    { key: "done", title: "Realizadas", empty: "Nada concluído ainda." }
+  ];
+  var MONTHS = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho", "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"];
+  var DOW = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+  var TYPES = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", mp4: "video/mp4", webm: "video/webm", csv: "text/csv", txt: "text/plain", md: "text/markdown", json: "application/json" };
+  var MAX_BYTES = 20 * 1024 * 1024;
+
+  function pad(n) { return String(n).padStart(2, "0"); }
+  function iso(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
+  function parse(s) { var p = s.split("-").map(Number); return new Date(p[0], p[1] - 1, p[2]); }
+  function shift(s, n) { var d = parse(s); d.setDate(d.getDate() + n); return iso(d); }
+  function br(s) { var p = s.split("-"); return p[2] + "/" + p[1]; }
+  function cap(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
+  function kb(n) { return n >= 1048576 ? (n / 1048576).toFixed(1).replace(".", ",") + " MB" : Math.max(1, Math.round(n / 1024)) + " KB"; }
+  function plural(n, a, b) { return n + " " + (n === 1 ? a : b); }
+
+  function append(e, c) {
+    if (c == null || c === false) return;
+    if (Array.isArray(c)) { c.forEach(function (x) { append(e, x); }); return; }
+    e.append(c.nodeType ? c : document.createTextNode(c));
+  }
+  function h(tag, props) {
+    var e = document.createElement(tag);
+    if (props) {
+      for (var k in props) {
+        var v = props[k];
+        if (k === "class") e.className = v;
+        else if (k.indexOf("on") === 0) e.addEventListener(k.slice(2), v);
+        else if (v === true) e.setAttribute(k, "");
+        else if (v !== false && v != null) e.setAttribute(k, v);
+      }
+    }
+    for (var i = 2; i < arguments.length; i++) append(e, arguments[i]);
+    return e;
+  }
+
+  var $ = function (id) { return document.getElementById(id); };
+  var today = iso(new Date());
+  var current = today;
+  var calView = { y: parse(today).getFullYear(), m: parse(today).getMonth() };
+  var tasks = [], tpls = [], rems = [];
+  var loaded = { tasks: true, tpls: true, rems: true };
+  var pending = {};
+  var ready = false;
+  var editingId = null, confirmId = null, confirmTimer = null;
+  var filter = "all";
+  var hlId = null;
+  var picked = [];
+  var busy = false;
+  var store = null;
+  var assetsApi = null;
+  var LS = "painel-atividades-v2";
+
+  function lsLoad() {
+    try {
+      var o = JSON.parse(localStorage.getItem(LS) || "null");
+      if (o) { tasks = o.tasks || []; tpls = o.tpls || []; rems = o.rems || []; return; }
+      var old = JSON.parse(localStorage.getItem("painel-atividades-v1") || "[]");
+      if (Array.isArray(old)) tasks = old;
+    } catch (e) {}
+  }
+  function lsSave() { try { localStorage.setItem(LS, JSON.stringify({ tasks: tasks, tpls: tpls, rems: rems })); } catch (e) {} }
+  function arr(k) { return k === "tasks" ? tasks : k === "tpls" ? tpls : rems; }
+  function setArr(k, v) { if (k === "tasks") tasks = v; else if (k === "tpls") tpls = v; else rems = v; }
+  function newId() { return "t" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+
+  var localStore = {
+    add: function (k, data) { var id = newId(); arr(k).push(Object.assign({ id: id }, data)); lsSave(); render(); return Promise.resolve(id); },
+    put: function (k, id, data) {
+      var a = arr(k), i = a.findIndex(function (x) { return x.id === id; }), o = Object.assign({ id: id }, data);
+      if (i >= 0) a[i] = o; else a.push(o);
+      lsSave(); render(); return Promise.resolve(id);
+    },
+    update: function (k, id, patch) {
+      var t = arr(k).find(function (x) { return x.id === id; });
+      if (t) Object.assign(t, patch);
+      lsSave(); render(); return Promise.resolve();
+    },
+    remove: function (k, id) { setArr(k, arr(k).filter(function (x) { return x.id !== id; })); lsSave(); render(); return Promise.resolve(); }
+  };
+
+  function fail(msg) { $("errNote").textContent = typeof msg === "string" ? msg : "Não foi possível salvar agora. Tente de novo."; }
+  function ok() { $("errNote").textContent = ""; }
+  var toastTimer = null;
+  function toast(msg) {
+    var t = $("toast");
+    t.textContent = msg; t.hidden = false;
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { t.hidden = true; }, 3200);
+  }
+
+  // Recorrência
+  function applies(tp, date) {
+    if ((tp.skip || []).indexOf(date) >= 0) return false;
+    if (date === tp.start) return true;
+    if (date < tp.start) return false;
+    var d = parse(date), s = parse(tp.start);
+    if (tp.freq === "daily") return true;
+    if (tp.freq === "weekdays") return d.getDay() >= 1 && d.getDay() <= 5;
+    if (tp.freq === "weekly") return d.getDay() === s.getDay();
+    if (tp.freq === "monthly") {
+      var dim = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+      return d.getDate() === Math.min(s.getDate(), dim);
+    }
+    return false;
+  }
+  function instanceData(tp, date) {
+    return { text: tp.text, cat: tp.cat, prio: tp.prio, date: date, status: "todo", createdAt: Date.now(), doneAt: null, recId: tp.id };
+  }
+  function ensureDay() {
+    if (!ready || !loaded.tasks || !loaded.tpls) return;
+    tpls.forEach(function (tp) {
+      if (!applies(tp, current)) return;
+      if (current < today && current !== tp.start) return;
+      var id = tp.id + "_" + current;
+      if (pending[id] || tasks.some(function (t) { return t.id === id; })) return;
+      pending[id] = 1;
+      store.put("tasks", id, instanceData(tp, current)).catch(function () { delete pending[id]; fail(); });
+    });
+  }
+
+  function addTask(text, cat, prio, rep) {
+    if (rep === "none") {
+      return store.add("tasks", { text: text, cat: cat, prio: prio, date: current, status: "todo", createdAt: Date.now(), doneAt: null });
+    }
+    var tp = { text: text, cat: cat, prio: prio, freq: rep, start: current, skip: [], createdAt: Date.now() };
+    return store.add("tpls", tp).then(function (id) {
+      var tid = id + "_" + current;
+      pending[tid] = 1;
+      tp.id = id;
+      return store.put("tasks", tid, instanceData(tp, current));
+    });
+  }
+  function setStatus(t, status) { return store.update("tasks", t.id, { status: status, doneAt: status === "done" ? Date.now() : null }); }
+  function removeOne(t) {
+    var tp = t.recId ? tpls.find(function (x) { return x.id === t.recId; }) : null;
+    var p = Promise.resolve();
+    if (tp) p = store.update("tpls", tp.id, { skip: (tp.skip || []).concat([t.date]) });
+    return p.then(function () { return store.remove("tasks", t.id); });
+  }
+  function removeSeries(t) {
+    var chain = store.remove("tpls", t.recId);
+    tasks.filter(function (x) { return x.recId === t.recId && x.date >= t.date && x.status !== "done"; }).forEach(function (x) {
+      chain = chain.then(function () { return store.remove("tasks", x.id); });
+    });
+    return chain;
+  }
+
+  function sortFor(list, key) {
+    return list.slice().sort(function (a, b) {
+      if (key === "done") return (b.doneAt || 0) - (a.doneAt || 0);
+      var pa = (PRIO[a.prio] || PRIO.media).rank, pb = (PRIO[b.prio] || PRIO.media).rank;
+      return pa - pb || (a.createdAt || 0) - (b.createdAt || 0);
+    });
+  }
+  function actBtn(label, cls, fn) { return h("button", { type: "button", class: "act " + cls, onclick: fn }, label); }
+  function armConfirm(id, ms) { confirmId = id; render(); clearTimeout(confirmTimer); confirmTimer = setTimeout(function () { confirmId = null; render(); }, ms); }
+  function endConfirm() { clearTimeout(confirmTimer); confirmId = null; }
+
+  function card(t) {
+    var tp = t.recId ? tpls.find(function (x) { return x.id === t.recId; }) : null;
+    var meta = h("div", { class: "meta" },
+      h("span", { class: "chip" }, t.cat || "Outros"),
+      h("span", { class: "prio", "data-p": t.prio }, (PRIO[t.prio] || PRIO.media).label),
+      t.recId ? h("span", { class: "chip rep" }, "↻ " + (tp ? FREQ[tp.freq] : "Repete")) : null
+    );
+    var body, actions;
+    if (editingId === t.id) {
+      var inp = h("input", { class: "field edit", type: "text", maxlength: "200", value: t.text, "aria-label": "Editar atividade", id: "editInput" });
+      var save = function () {
+        var v = inp.value.trim();
+        editingId = null;
+        if (v && v !== t.text) store.update("tasks", t.id, { text: v }).then(ok, fail); else render();
+      };
+      inp.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); save(); }
+        if (e.key === "Escape") { editingId = null; render(); }
+      });
+      body = inp;
+      actions = h("div", { class: "actions" }, actBtn("Salvar", "go", save), actBtn("Cancelar", "ghost", function () { editingId = null; render(); }));
+    } else {
+      body = h("p", { class: "text" }, t.text);
+      var main = [];
+      if (t.status === "todo") {
+        main.push(actBtn("Iniciar", "go", function () { setStatus(t, "doing").then(ok, fail); }));
+        main.push(actBtn("Concluir", "", function () { setStatus(t, "done").then(ok, fail); }));
+      } else if (t.status === "doing") {
+        main.push(actBtn("Concluir", "go", function () { setStatus(t, "done").then(ok, fail); }));
+        main.push(actBtn("Voltar", "", function () { setStatus(t, "todo").then(ok, fail); }));
+      } else {
+        main.push(actBtn("Reabrir", "", function () { setStatus(t, "todo").then(ok, fail); }));
+      }
+      var tail;
+      if (confirmId === t.id && t.recId) {
+        tail = [
+          actBtn("Só este dia", "danger confirm", function () { endConfirm(); removeOne(t).then(ok, fail); }),
+          actBtn("Toda a série", "danger confirm", function () { endConfirm(); removeSeries(t).then(ok, fail); }),
+          actBtn("Cancelar", "ghost", function () { endConfirm(); render(); })
+        ];
+      } else if (confirmId === t.id) {
+        tail = [actBtn("Confirmar exclusão", "danger confirm", function () { endConfirm(); removeOne(t).then(ok, fail); })];
+      } else {
+        tail = [
+          actBtn("Editar", "ghost", function () { editingId = t.id; render(); var i = $("editInput"); if (i) { i.focus(); i.select(); } }),
+          actBtn("Excluir", "ghost danger", function () { armConfirm(t.id, t.recId ? 6000 : 3500); })
+        ];
+      }
+      actions = h("div", { class: "actions" }, main, h("span", { class: "spacer" }, tail));
+    }
+    return h("article", { class: "card" + (t.status === "done" ? " is-done" : "") + (t.id === hlId ? " new" : ""), "data-id": t.id }, meta, body, actions);
+  }
+
+  // Anexos
+  function extOf(name) { var m = /\.([a-z0-9]+)$/i.exec(name || ""); return m ? m[1].toLowerCase() : ""; }
+  function checkFile(f) {
+    var t = TYPES[extOf(f.name)];
+    if (!t) return "“" + f.name + "” não é aceito. Converta para PDF ou imagem antes de anexar.";
+    if (f.size > MAX_BYTES) return "“" + f.name + "” passa de 20 MB.";
+    if (f.size === 0) return "“" + f.name + "” está vazio.";
+    return null;
+  }
+  function uploadError(e, name) {
+    var c = e && e.code;
+    if (c === "too_large") return "“" + name + "” é grande demais.";
+    if (c === "unsupported_type") return "“" + name + "” tem formato não aceito.";
+    if (c === "quota_or_state") return "O espaço de anexos está cheio. Apague arquivos antigos.";
+    if (c === "rate_limited") return "Muitos envios seguidos. Espere um instante.";
+    return "Não foi possível enviar “" + name + "”.";
+  }
+  async function uploadAll(files) {
+    var out = [];
+    for (var i = 0; i < files.length; i++) {
+      var f = files[i];
+      try {
+        var r = await assetsApi.upload(f, { type: TYPES[extOf(f.name)] });
+        out.push({ id: r.id, name: f.name, size: r.sizeBytes || f.size });
+      } catch (e) { throw new Error(uploadError(e, f.name)); }
+    }
+    return out;
+  }
+  function pickFiles(cb) {
+    var inp = document.createElement("input");
+    inp.type = "file"; inp.multiple = true;
+    inp.addEventListener("change", function () { cb(Array.prototype.slice.call(inp.files || [])); });
+    inp.click();
+  }
+  function dropAsset(id) { return assetsApi ? assetsApi.delete(id).catch(function () {}) : Promise.resolve(); }
+
+  function fileChip(f, onRemove) {
+    return h("span", { class: "file" },
+      onRemove ? h("span", { style: "padding:3px 8px;overflow-wrap:anywhere" }, f.name, h("small", null, kb(f.size))) :
+        h("a", { href: "/_blob/" + f.id, target: "_blank", rel: "noopener noreferrer" }, f.name, h("small", null, kb(f.size))),
+      h("button", { type: "button", "aria-label": "Remover anexo " + f.name, onclick: onRemove || null, hidden: !onRemove }, "✕")
+    );
+  }
+  function savedChip(r, f) {
+    return h("span", { class: "file" },
+      h("a", { href: "/_blob/" + f.id, target: "_blank", rel: "noopener noreferrer" }, f.name, h("small", null, kb(f.size))),
+      assetsApi ? h("button", { type: "button", "aria-label": "Remover anexo " + f.name, onclick: function () {
+        var rest = (r.files || []).filter(function (x) { return x.id !== f.id; });
+        store.update("rems", r.id, { files: rest }).then(function () { return dropAsset(f.id); }).then(ok, fail);
+      } }, "✕") : null
+    );
+  }
+
+  function remRow(r) {
+    var files = r.files || [];
+    return h("li", { class: "rem" + (r.done ? " is-done" : "") },
+      h("div", { class: "rem-main" },
+        h("input", { type: "checkbox", checked: !!r.done, "aria-label": "Marcar lembrete como feito", onchange: function () { store.update("rems", r.id, { done: !r.done }).then(ok, fail); } }),
+        h("span", { class: "rem-time" + (r.time ? "" : " all") }, r.time || "dia todo"),
+        h("span", { class: "rem-text" }, r.text),
+        assetsApi ? actBtn("+ Anexo", "ghost", function () {
+          pickFiles(function (list) {
+            if (!list.length) return;
+            var bad = list.map(checkFile).filter(Boolean);
+            if (bad.length) { fail(bad[0]); return; }
+            toast("Enviando " + plural(list.length, "arquivo", "arquivos") + "…");
+            uploadAll(list).then(function (up) { return store.update("rems", r.id, { files: files.concat(up) }); })
+              .then(function () { ok(); toast("Anexo salvo no lembrete."); }, function (e) { fail(e && e.message); });
+          });
+        }) : null,
+        actBtn("Excluir", "ghost danger", function () {
+          Promise.all(files.map(function (f) { return dropAsset(f.id); })).then(function () { return store.remove("rems", r.id); }).then(ok, fail);
+        })
+      ),
+      files.length ? h("div", { class: "files" }, files.map(function (f) { return savedChip(r, f); })) : null
+    );
+  }
+
+  // Calendário
+  function monthIndex() {
+    var idx = {};
+    function get(d) { return idx[d] || (idx[d] = { open: 0, done: 0, rem: 0 }); }
+    tasks.forEach(function (t) { var o = get(t.date); if (t.status === "done") o.done++; else o.open++; });
+    rems.forEach(function (r) { if (!r.done) get(r.date).rem++; });
+    return { get: get };
+  }
+  function renderCal() {
+    var first = new Date(calView.y, calView.m, 1);
+    $("calTitle").textContent = MONTHS[calView.m] + " " + calView.y;
+    var start = new Date(first); start.setDate(1 - first.getDay());
+    var ix = monthIndex();
+    var cells = DOW.map(function (n) { return h("div", { class: "dow" }, n); });
+    for (var i = 0; i < 42; i++) {
+      var d = new Date(start); d.setDate(start.getDate() + i);
+      var s = iso(d);
+      var info = ix.get(s);
+      var open = info.open;
+      if (s >= today) {
+        tpls.forEach(function (tp) {
+          if (applies(tp, s) && !tasks.some(function (t) { return t.id === tp.id + "_" + s; })) open++;
+        });
+      }
+      var late = s < today && open > 0;
+      var out = d.getMonth() !== calView.m;
+      var label = d.getDate() + " de " + MONTHS[d.getMonth()] + ": " + plural(open, "atividade aberta", "atividades abertas") + ", " + plural(info.rem, "lembrete", "lembretes");
+      var marks = [];
+      if (open > 0) marks.push(h("span", { class: "bd" + (late ? " late" : "") }, String(open)));
+      else if (info.done > 0) marks.push(h("span", { class: "bd ok" }, "✓"));
+      if (info.rem > 0) marks.push(h("span", { class: "rd", title: plural(info.rem, "lembrete", "lembretes") }));
+      cells.push(h("button", {
+        type: "button",
+        class: "cell" + (out ? " out" : "") + (open > 0 ? " has-open" : "") + (s === today ? " today" : "") + (s === current ? " sel" : ""),
+        "aria-label": label, "aria-pressed": s === current ? "true" : "false",
+        onclick: (function (ds) { return function () { go(ds); }; })(s)
+      }, h("span", { class: "n" }, String(d.getDate())), h("span", { class: "mk" }, marks)));
+    }
+    var g = $("calGrid");
+    g.replaceChildren.apply(g, cells);
+  }
+
+  function render() {
+    var d = parse(current);
+    $("dateTitle").textContent = cap(d.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" }));
+    $("dateSub").textContent = (current === today ? "Hoje · " : "") + pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear();
+    $("todayBtn").hidden = current === today;
+    $("addDay").textContent = "Dia " + br(current);
+    updateNote();
+
+    var day = tasks.filter(function (t) { return t.date === current; });
+    var done = day.filter(function (t) { return t.status === "done"; }).length;
+    var pct = day.length ? Math.round((done / day.length) * 100) : 0;
+    $("barFill").style.width = pct + "%";
+    $("barWrap").setAttribute("aria-valuenow", String(pct));
+    $("progressText").textContent = done + " de " + day.length + (day.length === 1 ? " realizada" : " realizadas") + (day.length ? " · " + pct + "%" : "");
+
+    // Lembretes do dia
+    var dayRems = rems.filter(function (r) { return r.date === current; }).sort(function (a, b) {
+      var ta = a.time || "", tb = b.time || "";
+      return ta < tb ? -1 : ta > tb ? 1 : (a.createdAt || 0) - (b.createdAt || 0);
+    });
+    $("remTitle").textContent = "Lembretes de " + br(current);
+    $("remCount").textContent = dayRems.filter(function (r) { return !r.done; }).length + " abertos";
+    var rl = $("remList");
+    if (dayRems.length) rl.replaceChildren.apply(rl, dayRems.map(remRow));
+    else rl.replaceChildren(h("li", null, h("p", { class: "rem-empty" }, "Nenhum lembrete neste dia. Adicione abaixo, com arquivos se precisar.")));
+    $("attachRow").querySelector("#pickBtn").hidden = !assetsApi;
+    $("attachHelp").hidden = !assetsApi;
+    var pk = $("picked");
+    pk.replaceChildren.apply(pk, picked.map(function (f, i) {
+      return fileChip({ name: f.name, size: f.size }, function () { picked.splice(i, 1); render(); });
+    }));
+
+    // Atrasadas
+    var late = tasks.filter(function (t) { return t.status !== "done" && t.date < today && !t.recId; });
+    var showCarry = current === today && late.length > 0;
+    $("carry").hidden = !showCarry;
+    if (showCarry) $("carryText").textContent = plural(late.length, "atividade de dias anteriores ainda não foi concluída.", "atividades de dias anteriores ainda não foram concluídas.");
+
+    // Filtro por setor
+    var counts = {};
+    day.forEach(function (t) { var c = t.cat || "Outros"; counts[c] = (counts[c] || 0) + 1; });
+    if (filter !== "all" && !counts[filter]) filter = "all";
+    var names = SECTORS.filter(function (s) { return counts[s]; }).concat(Object.keys(counts).filter(function (c) { return SECTORS.indexOf(c) < 0; }));
+    var fl = $("filters");
+    fl.hidden = day.length === 0;
+    var chips = [h("button", { type: "button", class: "fchip", "aria-pressed": filter === "all" ? "true" : "false", onclick: function () { filter = "all"; render(); } }, "Todos", h("b", null, String(day.length)))];
+    names.forEach(function (n) {
+      chips.push(h("button", { type: "button", class: "fchip", "aria-pressed": filter === n ? "true" : "false", onclick: function () { filter = n; render(); } }, n, h("b", null, String(counts[n]))));
+    });
+    fl.replaceChildren.apply(fl, chips);
+    $("secTitle").textContent = "Atividades de " + br(current) + (filter !== "all" ? " · " + filter : "");
+
+    var shown = filter === "all" ? day : day.filter(function (t) { return (t.cat || "Outros") === filter; });
+    var board = $("board");
+    board.replaceChildren.apply(board, COLS.map(function (c) {
+      var list = sortFor(shown.filter(function (t) { return t.status === c.key; }), c.key);
+      return h("section", { class: "col", "data-col": c.key, "aria-label": c.title },
+        h("div", { class: "col-head" }, h("span", { class: "dot" }), h("h3", null, c.title), h("span", { class: "count" }, String(list.length))),
+        list.length ? list.map(card) : h("p", { class: "empty" }, c.empty)
+      );
+    }));
+    renderCal();
+  }
+
+  function updateNote() {
+    var rep = $("newRepeat").value;
+    var has = tasks.some(function (t) { return t.date === current; });
+    var txt;
+    if (rep !== "none") txt = "Repete a partir de " + br(current) + " (" + FREQ[rep].toLowerCase() + ") e aparece sozinha nos dias seguintes.";
+    else if (has) txt = "A atividade entra em “A fazer” no dia " + br(current) + ".";
+    else txt = "Nenhuma atividade em " + br(current) + ". Preencha acima e pressione Enter para começar.";
+    $("addNote").textContent = txt;
+  }
+
+  function go(date) {
+    current = date; editingId = null; endConfirm();
+    var d = parse(date); calView = { y: d.getFullYear(), m: d.getMonth() };
+    ensureDay(); render();
+  }
+
+  function highlight(id, where) {
+    hlId = id; render();
+    var el = document.querySelector('[data-id="' + id + '"]');
+    if (el) { try { el.scrollIntoView({ block: "nearest", behavior: "smooth" }); } catch (e) {} }
+    setTimeout(function () { if (hlId === id) { hlId = null; var e2 = document.querySelector('[data-id="' + id + '"]'); if (e2) e2.classList.remove("new"); } }, 3500);
+    toast("Atividade adicionada em A fazer · " + where + " · " + br(current));
+  }
+
+  // Eventos
+  SECTORS.forEach(function (c) { $("newCat").append(h("option", { value: c }, c)); });
+  $("newRepeat").addEventListener("change", updateNote);
+  $("addForm").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var v = $("newText").value.trim();
+    if (!v) return;
+    if (!ready) { fail("Ainda carregando. Tente de novo em instantes."); return; }
+    var cat = $("newCat").value, rep = $("newRepeat").value;
+    var tid = null;
+    addTask(v, cat, $("newPrio").value, rep).then(function (id) {
+      ok();
+      if (filter !== "all" && filter !== cat) filter = "all";
+      highlight(rep === "none" ? id : (typeof id === "string" ? id : null), cat);
+    }, fail);
+    $("newText").value = "";
+    $("newRepeat").value = "none";
+    updateNote();
+    $("newText").focus();
+  });
+  $("pickBtn").addEventListener("click", function () {
+    pickFiles(function (list) {
+      var errs = [];
+      list.forEach(function (f) { var m = checkFile(f); if (m) errs.push(m); else picked.push(f); });
+      if (errs.length) fail(errs[0]); else ok();
+      render();
+    });
+  });
+  $("remForm").addEventListener("submit", async function (e) {
+    e.preventDefault();
+    if (busy) return;
+    var v = $("remText").value.trim();
+    if (!v) return;
+    if (!ready) { fail("Ainda carregando. Tente de novo em instantes."); return; }
+    busy = true;
+    var btn = $("remSubmit"); btn.disabled = true;
+    try {
+      var files = [];
+      if (picked.length && assetsApi) { btn.textContent = "Enviando anexos…"; files = await uploadAll(picked); }
+      await store.add("rems", { text: v, time: $("remTime").value || "", date: current, done: false, createdAt: Date.now(), files: files });
+      $("remText").value = ""; $("remTime").value = ""; picked = [];
+      ok(); toast("Lembrete salvo em " + br(current) + (files.length ? " com " + plural(files.length, "anexo", "anexos") : "") + ".");
+    } catch (err) { fail(err && err.message ? err.message : undefined); }
+    busy = false; btn.disabled = false; btn.textContent = "Adicionar lembrete";
+    render();
+    $("remText").focus();
+  });
+  $("prev").addEventListener("click", function () { go(shift(current, -1)); });
+  $("next").addEventListener("click", function () { go(shift(current, 1)); });
+  $("todayBtn").addEventListener("click", function () { go(today); });
+  $("calPrev").addEventListener("click", function () { calView = calView.m === 0 ? { y: calView.y - 1, m: 11 } : { y: calView.y, m: calView.m - 1 }; renderCal(); });
+  $("calNext").addEventListener("click", function () { calView = calView.m === 11 ? { y: calView.y + 1, m: 0 } : { y: calView.y, m: calView.m + 1 }; renderCal(); });
+  $("carryBtn").addEventListener("click", function () {
+    var late = tasks.filter(function (t) { return t.status !== "done" && t.date < today && !t.recId; });
+    var chain = Promise.resolve();
+    late.forEach(function (t) { chain = chain.then(function () { return store.update("tasks", t.id, { date: today }); }); });
+    chain.then(ok, fail);
+  });
+
+  // Armazenamento: conta do viewer (db) ou, sem ele, este navegador
+  lsLoad();
+  store = localStore;
+  render();
+
+  function useLocal() {
+    store = localStore; ready = true;
+    $("saveNote").textContent = "Salvo neste navegador (anexos indisponíveis)";
+    ensureDay(); render();
+  }
+
+  (async function () {
+    try {
+      if (!window.claude || !window.claude.use) return useLocal();
+      var user = await window.claude.use("user");
+      var db = await window.claude.use("db");
+      var uid = user ? await user.id() : null;
+      if (!db || !uid) return useLocal();
+      try { assetsApi = await window.claude.use("assets"); } catch (e) { assetsApi = null; }
+      var base = db.doc("data/users/" + uid + "/profile");
+      var cols = { tasks: base.collection("tasks"), tpls: base.collection("recurring"), rems: base.collection("reminders") };
+      store = {
+        add: function (k, data) { return cols[k].add(data).then(function (ref) { return ref.id; }); },
+        put: function (k, id, data) { return cols[k].doc(id).set(data).then(function () { return id; }); },
+        update: function (k, id, patch) { return cols[k].doc(id).update(patch); },
+        remove: function (k, id) { return cols[k].doc(id).delete(); }
+      };
+      tasks = []; tpls = []; rems = [];
+      loaded = { tasks: false, tpls: false, rems: false };
+      ready = true;
+      ["tasks", "tpls", "rems"].forEach(function (k) {
+        cols[k].limit(1000).onSnapshot(function (snap) {
+          setArr(k, snap.docs.map(function (dd) { return Object.assign({ id: dd.id }, dd.data()); }));
+          loaded[k] = true;
+          $("saveNote").textContent = "Salvo na sua conta, visível só para você";
+          ensureDay();
+          if (editingId === null) render();
+        }, function () { fail(); });
+      });
+      render();
+    } catch (e) { useLocal(); }
+  })();
+})();
+</script>
+
+</body>
+</html>
