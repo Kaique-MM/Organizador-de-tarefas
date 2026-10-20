@@ -46,16 +46,14 @@
     </aside>
 
     <div class="main">
-      <form class="card-box" id="addForm" autocomplete="off">
-        <div class="box-head"><h2>Nova atividade</h2><span class="count" id="addDay"></span></div>
-        <div class="row">
-          <div class="f grow">
-            <label for="newText">O que precisa ser feito</label>
-            <input class="field" id="newText" type="text" maxlength="200" placeholder="Ex.: Emitir CT-e da carga 1482" required>
-          </div>
+      <form class="card-box add-bar" id="addForm" autocomplete="off">
+        <div class="add-line">
+          <input class="field" id="newText" type="text" maxlength="200" aria-label="Nova atividade" placeholder="Nova atividade" required>
+          <label class="inl">Setor <select class="field" id="newCat"></select></label>
+          <button class="btn primary" type="submit">Adicionar</button>
+          <button class="btn" id="moreBtn" type="button" aria-expanded="false" aria-controls="moreOpts">Mais opções</button>
         </div>
-        <div class="row">
-          <div class="f sel"><label for="newCat">Setor</label><select class="field" id="newCat"></select></div>
+        <div class="row" id="moreOpts" hidden>
           <div class="f sel"><label for="newPrio">Prioridade</label>
             <select class="field" id="newPrio">
               <option value="alta">Alta</option>
@@ -72,13 +70,15 @@
               <option value="monthly">Todo mês</option>
             </select>
           </div>
-          <button class="btn primary" type="submit">Adicionar atividade</button>
+          <div class="f"><label for="newDue">Prazo (até as)</label><input class="field" id="newDue" type="time"></div>
+          <div class="f grow"><label for="newNote">Observação</label><input class="field" id="newNote" type="text" maxlength="160" placeholder="Ex.: carga 1482, NF 5520"></div>
         </div>
-        <p class="note" id="addNote"></p>
+        <p class="note" id="addNote" hidden></p>
       </form>
 
-      <section class="card-box" aria-label="Lembretes do dia">
-        <div class="box-head"><h2 id="remTitle">Lembretes</h2><span class="count" id="remCount">0 abertos</span></div>
+      <details class="card-box rem-box" id="remBox">
+        <summary class="box-head"><h2 id="remTitle">Lembretes</h2><span class="count" id="remCount">0 abertos</span></summary>
+        <div class="rem-body">
         <ul class="rem-list" id="remList"></ul>
         <form id="remForm" autocomplete="off" style="display:flex;flex-direction:column;gap:10px">
           <div class="row">
@@ -92,7 +92,8 @@
           </div>
           <p class="attach-help" id="attachHelp">Anexos aceitos: PDF, imagens (PNG, JPG, GIF, WEBP, SVG), vídeo (MP4, WEBM), CSV, TXT, MD e JSON, até 20 MB cada.</p>
         </form>
-      </section>
+        </div>
+      </details>
 
       <div id="carry" class="carry" hidden>
         <p id="carryText"></p>
@@ -128,6 +129,7 @@
   var DOW = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
   var TYPES = { pdf: "application/pdf", png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", gif: "image/gif", webp: "image/webp", svg: "image/svg+xml", mp4: "video/mp4", webm: "video/webm", csv: "text/csv", txt: "text/plain", md: "text/markdown", json: "application/json" };
   var MAX_BYTES = 20 * 1024 * 1024;
+  var HUES = { Fiscal: 245, Financeiro: 160, T1: 15, T2: 335, Industrial: 80, Terceiros: 285, CCO: 195 };
 
   function pad(n) { return String(n).padStart(2, "0"); }
   function iso(d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); }
@@ -170,6 +172,7 @@
   var filter = "all";
   var hlId = null;
   var picked = [];
+  var remOpen = null;
   var busy = false;
   var store = null;
   var assetsApi = null;
@@ -229,7 +232,7 @@
     return false;
   }
   function instanceData(tp, date) {
-    return { text: tp.text, cat: tp.cat, prio: tp.prio, date: date, status: "todo", createdAt: Date.now(), doneAt: null, recId: tp.id };
+    return { text: tp.text, cat: tp.cat, prio: tp.prio, due: tp.due || "", note: tp.note || "", date: date, status: "todo", createdAt: Date.now(), doneAt: null, recId: tp.id };
   }
   function ensureDay() {
     if (!ready || !loaded.tasks || !loaded.tpls) return;
@@ -243,11 +246,11 @@
     });
   }
 
-  function addTask(text, cat, prio, rep) {
+  function addTask(text, cat, prio, rep, due, note) {
     if (rep === "none") {
-      return store.add("tasks", { text: text, cat: cat, prio: prio, date: current, status: "todo", createdAt: Date.now(), doneAt: null });
+      return store.add("tasks", { text: text, cat: cat, prio: prio, due: due, note: note, date: current, status: "todo", createdAt: Date.now(), doneAt: null });
     }
-    var tp = { text: text, cat: cat, prio: prio, freq: rep, start: current, skip: [], createdAt: Date.now() };
+    var tp = { text: text, cat: cat, prio: prio, due: due, note: note, freq: rep, start: current, skip: [], createdAt: Date.now() };
     return store.add("tpls", tp).then(function (id) {
       var tid = id + "_" + current;
       pending[tid] = 1;
@@ -274,8 +277,22 @@
     return list.slice().sort(function (a, b) {
       if (key === "done") return (b.doneAt || 0) - (a.doneAt || 0);
       var pa = (PRIO[a.prio] || PRIO.media).rank, pb = (PRIO[b.prio] || PRIO.media).rank;
-      return pa - pb || (a.createdAt || 0) - (b.createdAt || 0);
+      var da = a.due || "99:99", db_ = b.due || "99:99";
+      return pa - pb || (da < db_ ? -1 : da > db_ ? 1 : 0) || (a.createdAt || 0) - (b.createdAt || 0);
     });
+  }
+  function dueInfo(t) {
+    if (!t.due || t.status === "done") return null;
+    var parts = t.due.split(":"), dt = parse(t.date);
+    dt.setHours(Number(parts[0]), Number(parts[1]), 0, 0);
+    var diff = dt - new Date();
+    if (diff < 0) return { cls: "late", label: "Vencida · " + t.due };
+    if (diff < 3600000) return { cls: "soon", label: "Vence em " + Math.max(1, Math.ceil(diff / 60000)) + " min" };
+    return { cls: "", label: "Até " + t.due };
+  }
+  function secChip(name) {
+    var hue = HUES[name];
+    return h("span", { class: "chip sec", style: hue != null ? "--h:" + hue : null }, name || "Outros");
   }
   function actBtn(label, cls, fn) { return h("button", { type: "button", class: "act " + cls, onclick: fn }, label); }
   function armConfirm(id, ms) { confirmId = id; render(); clearTimeout(confirmTimer); confirmTimer = setTimeout(function () { confirmId = null; render(); }, ms); }
@@ -283,27 +300,33 @@
 
   function card(t) {
     var tp = t.recId ? tpls.find(function (x) { return x.id === t.recId; }) : null;
+    var di = dueInfo(t);
     var meta = h("div", { class: "meta" },
-      h("span", { class: "chip" }, t.cat || "Outros"),
+      secChip(t.cat || "Outros"),
       h("span", { class: "prio", "data-p": t.prio }, (PRIO[t.prio] || PRIO.media).label),
+      di ? h("span", { class: "chip due " + di.cls }, di.label) : null,
       t.recId ? h("span", { class: "chip rep" }, "↻ " + (tp ? FREQ[tp.freq] : "Repete")) : null
     );
     var body, actions;
     if (editingId === t.id) {
-      var inp = h("input", { class: "field edit", type: "text", maxlength: "200", value: t.text, "aria-label": "Editar atividade", id: "editInput" });
+      var inp = h("input", { class: "field", type: "text", maxlength: "200", value: t.text, "aria-label": "Editar atividade", id: "editInput" });
+      var noteInp = h("input", { class: "field", type: "text", maxlength: "160", value: t.note || "", placeholder: "Observação", "aria-label": "Observação" });
+      var dueInp = h("input", { class: "field", type: "time", value: t.due || "", "aria-label": "Prazo" });
       var save = function () {
-        var v = inp.value.trim();
+        var patch = { text: inp.value.trim() || t.text, note: noteInp.value.trim(), due: dueInp.value || "" };
         editingId = null;
-        if (v && v !== t.text) store.update("tasks", t.id, { text: v }).then(ok, fail); else render();
+        store.update("tasks", t.id, patch).then(ok, fail);
       };
-      inp.addEventListener("keydown", function (e) {
-        if (e.key === "Enter") { e.preventDefault(); save(); }
-        if (e.key === "Escape") { editingId = null; render(); }
+      [inp, noteInp, dueInp].forEach(function (el) {
+        el.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") { e.preventDefault(); save(); }
+          if (e.key === "Escape") { editingId = null; render(); }
+        });
       });
-      body = inp;
+      body = h("div", { class: "edit-box" }, inp, h("div", { class: "row" }, noteInp, dueInp));
       actions = h("div", { class: "actions" }, actBtn("Salvar", "go", save), actBtn("Cancelar", "ghost", function () { editingId = null; render(); }));
     } else {
-      body = h("p", { class: "text" }, t.text);
+      body = [h("p", { class: "text" }, t.text), t.note ? h("p", { class: "note-line" }, t.note) : null];
       var main = [];
       if (t.status === "todo") {
         main.push(actBtn("Iniciar", "go", function () { setStatus(t, "doing").then(ok, fail); }));
@@ -459,7 +482,6 @@
     $("dateTitle").textContent = cap(d.toLocaleDateString("pt-BR", { weekday: "long", day: "numeric", month: "long" }));
     $("dateSub").textContent = (current === today ? "Hoje · " : "") + pad(d.getDate()) + "/" + pad(d.getMonth() + 1) + "/" + d.getFullYear();
     $("todayBtn").hidden = current === today;
-    $("addDay").textContent = "Dia " + br(current);
     updateNote();
 
     var day = tasks.filter(function (t) { return t.date === current; });
@@ -467,7 +489,8 @@
     var pct = day.length ? Math.round((done / day.length) * 100) : 0;
     $("barFill").style.width = pct + "%";
     $("barWrap").setAttribute("aria-valuenow", String(pct));
-    $("progressText").textContent = done + " de " + day.length + (day.length === 1 ? " realizada" : " realizadas") + (day.length ? " · " + pct + "%" : "");
+    var overdue = day.filter(function (t) { var di = dueInfo(t); return di && di.cls === "late"; }).length;
+    $("progressText").textContent = done + " de " + day.length + (day.length === 1 ? " realizada" : " realizadas") + (day.length ? " · " + pct + "%" : "") + (overdue ? " · " + plural(overdue, "vencida", "vencidas") : "");
 
     // Lembretes do dia
     var dayRems = rems.filter(function (r) { return r.date === current; }).sort(function (a, b) {
@@ -475,7 +498,9 @@
       return ta < tb ? -1 : ta > tb ? 1 : (a.createdAt || 0) - (b.createdAt || 0);
     });
     $("remTitle").textContent = "Lembretes de " + br(current);
-    $("remCount").textContent = dayRems.filter(function (r) { return !r.done; }).length + " abertos";
+    var openRems = dayRems.filter(function (r) { return !r.done; }).length;
+    $("remCount").textContent = dayRems.length ? openRems + " abertos" : "Adicionar";
+    $("remBox").open = remOpen === null ? openRems > 0 : remOpen;
     var rl = $("remList");
     if (dayRems.length) rl.replaceChildren.apply(rl, dayRems.map(remRow));
     else rl.replaceChildren(h("li", null, h("p", { class: "rem-empty" }, "Nenhum lembrete neste dia. Adicione abaixo, com arquivos se precisar.")));
@@ -501,7 +526,7 @@
     fl.hidden = day.length === 0;
     var chips = [h("button", { type: "button", class: "fchip", "aria-pressed": filter === "all" ? "true" : "false", onclick: function () { filter = "all"; render(); } }, "Todos", h("b", null, String(day.length)))];
     names.forEach(function (n) {
-      chips.push(h("button", { type: "button", class: "fchip", "aria-pressed": filter === n ? "true" : "false", onclick: function () { filter = n; render(); } }, n, h("b", null, String(counts[n]))));
+      chips.push(h("button", { type: "button", class: "fchip", "aria-pressed": filter === n ? "true" : "false", onclick: function () { filter = n; render(); } }, HUES[n] != null ? h("i", { class: "sdot", style: "--h:" + HUES[n] }) : null, n, h("b", null, String(counts[n]))));
     });
     fl.replaceChildren.apply(fl, chips);
     $("secTitle").textContent = "Atividades de " + br(current) + (filter !== "all" ? " · " + filter : "");
@@ -520,16 +545,14 @@
 
   function updateNote() {
     var rep = $("newRepeat").value;
-    var has = tasks.some(function (t) { return t.date === current; });
-    var txt;
-    if (rep !== "none") txt = "Repete a partir de " + br(current) + " (" + FREQ[rep].toLowerCase() + ") e aparece sozinha nos dias seguintes.";
-    else if (has) txt = "A atividade entra em “A fazer” no dia " + br(current) + ".";
-    else txt = "Nenhuma atividade em " + br(current) + ". Preencha acima e pressione Enter para começar.";
+    $("newText").placeholder = "Nova atividade em " + br(current) + ". Ex.: Emitir CT-e da carga 1482";
+    var txt = rep !== "none" ? "Repete a partir de " + br(current) + " (" + FREQ[rep].toLowerCase() + ") e aparece sozinha nos dias seguintes." : "";
     $("addNote").textContent = txt;
+    $("addNote").hidden = !txt;
   }
 
   function go(date) {
-    current = date; editingId = null; endConfirm();
+    current = date; editingId = null; remOpen = null; endConfirm();
     var d = parse(date); calView = { y: d.getFullYear(), m: d.getMonth() };
     ensureDay(); render();
   }
@@ -545,6 +568,16 @@
   // Eventos
   SECTORS.forEach(function (c) { $("newCat").append(h("option", { value: c }, c)); });
   $("newRepeat").addEventListener("change", updateNote);
+  $("moreBtn").addEventListener("click", function () {
+    var m = $("moreOpts"); m.hidden = !m.hidden;
+    this.setAttribute("aria-expanded", String(!m.hidden));
+    this.textContent = m.hidden ? "Mais opções" : "Menos opções";
+  });
+  $("remBox").querySelector("summary").addEventListener("click", function () { remOpen = !$("remBox").open; });
+  setInterval(function () {
+    var a = document.activeElement;
+    if (editingId === null && !(a && ["INPUT", "SELECT", "TEXTAREA"].indexOf(a.tagName) >= 0)) render();
+  }, 60000);
   $("addForm").addEventListener("submit", function (e) {
     e.preventDefault();
     var v = $("newText").value.trim();
@@ -552,13 +585,15 @@
     if (!ready) { fail("Ainda carregando. Tente de novo em instantes."); return; }
     var cat = $("newCat").value, rep = $("newRepeat").value;
     var tid = null;
-    addTask(v, cat, $("newPrio").value, rep).then(function (id) {
+    addTask(v, cat, $("newPrio").value, rep, $("newDue").value || "", $("newNote").value.trim()).then(function (id) {
       ok();
       if (filter !== "all" && filter !== cat) filter = "all";
       highlight(rep === "none" ? id : (typeof id === "string" ? id : null), cat);
     }, fail);
     $("newText").value = "";
     $("newRepeat").value = "none";
+    $("newDue").value = "";
+    $("newNote").value = "";
     updateNote();
     $("newText").focus();
   });
