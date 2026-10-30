@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Painel de Atividades</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -50,9 +51,12 @@
         <div class="add-line">
           <input class="field" id="newText" type="text" maxlength="200" aria-label="Nova atividade" placeholder="Nova atividade" required>
           <label class="inl">Setor <select class="field" id="newCat"></select></label>
+          <button class="btn" id="attachBtn" type="button" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 01-7.8-7.8l9-9a3.7 3.7 0 015.2 5.2l-9 9a1.8 1.8 0 01-2.6-2.6l8.3-8.3"/></svg> Anexar arquivos</button>
           <button class="btn primary" type="submit">Adicionar</button>
           <button class="btn" id="moreBtn" type="button" aria-expanded="false" aria-controls="moreOpts">Mais opções</button>
         </div>
+        <div class="picked" id="picked"></div>
+        <p class="attach-help" id="attachHelp" hidden></p>
         <div class="row" id="moreOpts" hidden>
           <div class="f sel"><label for="newPrio">Prioridade</label>
             <select class="field" id="newPrio">
@@ -86,11 +90,8 @@
             <div class="f"><label for="remTime">Horário</label><input class="field" id="remTime" type="time"></div>
           </div>
           <div class="row" id="attachRow">
-            <button class="btn" id="pickBtn" type="button">Anexar arquivos</button>
-            <div class="picked" id="picked"></div>
             <button class="btn primary" id="remSubmit" type="submit" style="margin-left:auto">Adicionar lembrete</button>
           </div>
-          <p class="attach-help" id="attachHelp">Anexos aceitos: PDF, imagens (PNG, JPG, GIF, WEBP, SVG), vídeo (MP4, WEBM), CSV, TXT, MD e JSON, até 20 MB cada.</p>
         </form>
         </div>
       </details>
@@ -176,7 +177,47 @@
   var busy = false;
   var store = null;
   var assetsApi = null;
+  var localFiles = false;
   var LS = "painel-atividades-v2";
+
+  // Anexos guardados no próprio navegador (usados quando o armazenamento da conta não está disponível)
+  var localAssets = {
+    db: function () {
+      return new Promise(function (res, rej) {
+        var rq = indexedDB.open("painel-anexos", 1);
+        rq.onupgradeneeded = function () { rq.result.createObjectStore("files", { keyPath: "id" }); };
+        rq.onsuccess = function () { res(rq.result); };
+        rq.onerror = function () { rej(rq.error); };
+      });
+    },
+    tx: function (mode, fn) {
+      return this.db().then(function (d) {
+        return new Promise(function (res, rej) {
+          var t = d.transaction("files", mode), out = fn(t.objectStore("files"));
+          t.oncomplete = function () { res(out && out.result); };
+          t.onerror = t.onabort = function () { rej(t.error); };
+        });
+      });
+    },
+    upload: function (file) {
+      var id = "f" + newId();
+      return this.tx("readwrite", function (st) { return st.put({ id: id, blob: file, name: file.name, type: file.type }); })
+        .then(function () { return { id: id, sizeBytes: file.size }; });
+    },
+    delete: function (id) {
+      return this.tx("readwrite", function (st) { return st.delete(id); }).then(function () { return { deleted: true }; });
+    },
+    open: function (id) {
+      return this.tx("readonly", function (st) { return st.get(id); }).then(function (rec) {
+        if (!rec) { fail("Arquivo não encontrado neste navegador."); return; }
+        var url = URL.createObjectURL(rec.blob), a = document.createElement("a");
+        a.href = url; a.rel = "noopener";
+        if (/^(image\/|video\/|application\/pdf|text\/plain)/.test(rec.type || "")) a.target = "_blank"; else a.download = rec.name;
+        document.body.appendChild(a); a.click(); a.remove();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 60000);
+      }).catch(function () { fail("Não foi possível abrir o arquivo."); });
+    }
+  };
 
   function lsLoad() {
     try {
@@ -246,29 +287,31 @@
     });
   }
 
-  function addTask(text, cat, prio, rep, due, note) {
+  function addTask(text, cat, prio, rep, due, note, files) {
     if (rep === "none") {
-      return store.add("tasks", { text: text, cat: cat, prio: prio, due: due, note: note, date: current, status: "todo", createdAt: Date.now(), doneAt: null });
+      return store.add("tasks", { text: text, cat: cat, prio: prio, due: due, note: note, files: files || [], date: current, status: "todo", createdAt: Date.now(), doneAt: null });
     }
     var tp = { text: text, cat: cat, prio: prio, due: due, note: note, freq: rep, start: current, skip: [], createdAt: Date.now() };
     return store.add("tpls", tp).then(function (id) {
       var tid = id + "_" + current;
       pending[tid] = 1;
       tp.id = id;
-      return store.put("tasks", tid, instanceData(tp, current));
+      return store.put("tasks", tid, Object.assign(instanceData(tp, current), { files: files || [] }));
     });
   }
   function setStatus(t, status) { return store.update("tasks", t.id, { status: status, doneAt: status === "done" ? Date.now() : null }); }
+  function dropFiles(t) { return Promise.all((t.files || []).map(function (f) { return dropAsset(f.id); })); }
   function removeOne(t) {
     var tp = t.recId ? tpls.find(function (x) { return x.id === t.recId; }) : null;
     var p = Promise.resolve();
     if (tp) p = store.update("tpls", tp.id, { skip: (tp.skip || []).concat([t.date]) });
-    return p.then(function () { return store.remove("tasks", t.id); });
+    return p.then(function () { return store.remove("tasks", t.id); }).then(function () { return dropFiles(t); });
   }
   function removeSeries(t) {
     var chain = store.remove("tpls", t.recId);
-    tasks.filter(function (x) { return x.recId === t.recId && x.date >= t.date && x.status !== "done"; }).forEach(function (x) {
-      chain = chain.then(function () { return store.remove("tasks", x.id); });
+    var victims = tasks.filter(function (x) { return x.recId === t.recId && (x.id === t.id || (x.date >= t.date && x.status !== "done")); });
+    victims.forEach(function (x) {
+      chain = chain.then(function () { return store.remove("tasks", x.id); }).then(function () { return dropFiles(x); });
     });
     return chain;
   }
@@ -326,17 +369,19 @@
       body = h("div", { class: "edit-box" }, inp, h("div", { class: "row" }, noteInp, dueInp));
       actions = h("div", { class: "actions" }, actBtn("Salvar", "go", save), actBtn("Cancelar", "ghost", function () { editingId = null; render(); }));
     } else {
-      body = [h("p", { class: "text" }, t.text), t.note ? h("p", { class: "note-line" }, t.note) : null];
+      body = [h("p", { class: "text" }, t.text), t.note ? h("p", { class: "note-line" }, t.note) : null,
+        (t.files && t.files.length) ? h("div", { class: "files tfiles" }, t.files.map(function (f) { return savedChip("tasks", t, f); })) : null];
       var main = [];
       if (t.status === "todo") {
         main.push(actBtn("Iniciar", "go", function () { setStatus(t, "doing").then(ok, fail); }));
         main.push(actBtn("Concluir", "", function () { setStatus(t, "done").then(ok, fail); }));
       } else if (t.status === "doing") {
-        main.push(actBtn("Concluir", "go", function () { setStatus(t, "done").then(ok, fail); }));
+        main.push(actBtn("Concluir", "go ok", function () { setStatus(t, "done").then(ok, fail); }));
         main.push(actBtn("Voltar", "", function () { setStatus(t, "todo").then(ok, fail); }));
       } else {
         main.push(actBtn("Reabrir", "", function () { setStatus(t, "todo").then(ok, fail); }));
       }
+      if (assetsApi) main.push(h("button", { type: "button", class: "act", onclick: function () { pickFiles(function (list) { attachTo("tasks", t, list); }); } }, clipIcon(), (t.files && t.files.length) ? "Anexar (" + t.files.length + ")" : "Anexar"));
       var tail;
       if (confirmId === t.id && t.recId) {
         tail = [
@@ -354,16 +399,22 @@
       }
       actions = h("div", { class: "actions" }, main, h("span", { class: "spacer" }, tail));
     }
-    return h("article", { class: "card" + (t.status === "done" ? " is-done" : "") + (t.id === hlId ? " new" : ""), "data-id": t.id }, meta, body, actions);
+    var art = h("article", { class: "card" + (t.status === "done" ? " is-done" : "") + (t.id === hlId ? " new" : ""), "data-id": t.id }, meta, body, actions);
+    if (assetsApi && editingId !== t.id) {
+      art.addEventListener("dragover", function (e) { if (e.dataTransfer && Array.prototype.indexOf.call(e.dataTransfer.types || [], "Files") >= 0) { e.preventDefault(); art.classList.add("drop"); } });
+      art.addEventListener("dragleave", function () { art.classList.remove("drop"); });
+      art.addEventListener("drop", function (e) { e.preventDefault(); art.classList.remove("drop"); attachTo("tasks", t, Array.prototype.slice.call(e.dataTransfer.files || [])); });
+    }
+    return art;
   }
 
   // Anexos
   function extOf(name) { var m = /\.([a-z0-9]+)$/i.exec(name || ""); return m ? m[1].toLowerCase() : ""; }
   function checkFile(f) {
-    var t = TYPES[extOf(f.name)];
-    if (!t) return "“" + f.name + "” não é aceito. Converta para PDF ou imagem antes de anexar.";
-    if (f.size > MAX_BYTES) return "“" + f.name + "” passa de 20 MB.";
     if (f.size === 0) return "“" + f.name + "” está vazio.";
+    if (localFiles) return f.size > 50 * 1024 * 1024 ? "“" + f.name + "” passa de 50 MB." : null;
+    if (!TYPES[extOf(f.name)]) return "“" + f.name + "” não é aceito. Converta para PDF ou imagem antes de anexar.";
+    if (f.size > MAX_BYTES) return "“" + f.name + "” passa de 20 MB.";
     return null;
   }
   function uploadError(e, name) {
@@ -391,6 +442,15 @@
     inp.addEventListener("change", function () { cb(Array.prototype.slice.call(inp.files || [])); });
     inp.click();
   }
+  function clipIcon() { var e = document.createElement("span"); e.className = "ic"; e.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 11.5l-8.6 8.6a5.5 5.5 0 01-7.8-7.8l9-9a3.7 3.7 0 015.2 5.2l-9 9a1.8 1.8 0 01-2.6-2.6l8.3-8.3"/></svg>'; return e; }
+  function attachTo(coll, rec, list) {
+    if (!assetsApi || !list.length) return;
+    var bad = list.map(checkFile).filter(Boolean);
+    if (bad.length) { fail(bad[0]); return; }
+    toast("Enviando " + plural(list.length, "arquivo", "arquivos") + "…");
+    uploadAll(list).then(function (up) { return store.update(coll, rec.id, { files: (rec.files || []).concat(up) }); })
+      .then(function () { ok(); toast("Anexo salvo."); }, function (e) { fail(e && e.message); });
+  }
   function dropAsset(id) { return assetsApi ? assetsApi.delete(id).catch(function () {}) : Promise.resolve(); }
 
   function fileChip(f, onRemove) {
@@ -400,12 +460,17 @@
       h("button", { type: "button", "aria-label": "Remover anexo " + f.name, onclick: onRemove || null, hidden: !onRemove }, "✕")
     );
   }
-  function savedChip(r, f) {
+  function fileLink(f) {
+    return localFiles
+      ? h("a", { href: "#", onclick: function (e) { e.preventDefault(); localAssets.open(f.id); } }, clipIcon(), " " + f.name, h("small", null, kb(f.size)))
+      : h("a", { href: "/_blob/" + f.id, target: "_blank", rel: "noopener noreferrer" }, clipIcon(), " " + f.name, h("small", null, kb(f.size)));
+  }
+  function savedChip(coll, r, f) {
     return h("span", { class: "file" },
-      h("a", { href: "/_blob/" + f.id, target: "_blank", rel: "noopener noreferrer" }, f.name, h("small", null, kb(f.size))),
+      fileLink(f),
       assetsApi ? h("button", { type: "button", "aria-label": "Remover anexo " + f.name, onclick: function () {
         var rest = (r.files || []).filter(function (x) { return x.id !== f.id; });
-        store.update("rems", r.id, { files: rest }).then(function () { return dropAsset(f.id); }).then(ok, fail);
+        store.update(coll, r.id, { files: rest }).then(function () { return dropAsset(f.id); }).then(ok, fail);
       } }, "✕") : null
     );
   }
@@ -417,21 +482,11 @@
         h("input", { type: "checkbox", checked: !!r.done, "aria-label": "Marcar lembrete como feito", onchange: function () { store.update("rems", r.id, { done: !r.done }).then(ok, fail); } }),
         h("span", { class: "rem-time" + (r.time ? "" : " all") }, r.time || "dia todo"),
         h("span", { class: "rem-text" }, r.text),
-        assetsApi ? actBtn("+ Anexo", "ghost", function () {
-          pickFiles(function (list) {
-            if (!list.length) return;
-            var bad = list.map(checkFile).filter(Boolean);
-            if (bad.length) { fail(bad[0]); return; }
-            toast("Enviando " + plural(list.length, "arquivo", "arquivos") + "…");
-            uploadAll(list).then(function (up) { return store.update("rems", r.id, { files: files.concat(up) }); })
-              .then(function () { ok(); toast("Anexo salvo no lembrete."); }, function (e) { fail(e && e.message); });
-          });
-        }) : null,
         actBtn("Excluir", "ghost danger", function () {
           Promise.all(files.map(function (f) { return dropAsset(f.id); })).then(function () { return store.remove("rems", r.id); }).then(ok, fail);
         })
       ),
-      files.length ? h("div", { class: "files" }, files.map(function (f) { return savedChip(r, f); })) : null
+      files.length ? h("div", { class: "files" }, files.map(function (f) { return savedChip("rems", r, f); })) : null
     );
   }
 
@@ -504,8 +559,11 @@
     var rl = $("remList");
     if (dayRems.length) rl.replaceChildren.apply(rl, dayRems.map(remRow));
     else rl.replaceChildren(h("li", null, h("p", { class: "rem-empty" }, "Nenhum lembrete neste dia. Adicione abaixo, com arquivos se precisar.")));
-    $("attachRow").querySelector("#pickBtn").hidden = !assetsApi;
+    $("attachBtn").hidden = !assetsApi;
     $("attachHelp").hidden = !assetsApi;
+    $("attachHelp").textContent = localFiles
+      ? "Qualquer formato, até 50 MB, guardado neste navegador. Dica: arraste arquivos sobre uma atividade para anexar."
+      : "Formatos: PDF, imagens, vídeo, CSV, TXT, MD e JSON (até 20 MB). Dica: arraste arquivos sobre uma atividade para anexar.";
     var pk = $("picked");
     pk.replaceChildren.apply(pk, picked.map(function (f, i) {
       return fileChip({ name: f.name, size: f.size }, function () { picked.splice(i, 1); render(); });
@@ -546,7 +604,7 @@
   function updateNote() {
     var rep = $("newRepeat").value;
     $("newText").placeholder = "Nova atividade em " + br(current) + ". Ex.: Emitir CT-e da carga 1482";
-    var txt = rep !== "none" ? "Repete a partir de " + br(current) + " (" + FREQ[rep].toLowerCase() + ") e aparece sozinha nos dias seguintes." : "";
+    var txt = rep !== "none" ? "Repete a partir de " + br(current) + " (" + FREQ[rep].toLowerCase() + ") e aparece sozinha nos dias seguintes." + (picked.length ? " Os anexos ficam só na atividade deste dia." : "") : "";
     $("addNote").textContent = txt;
     $("addNote").hidden = !txt;
   }
@@ -578,26 +636,29 @@
     var a = document.activeElement;
     if (editingId === null && !(a && ["INPUT", "SELECT", "TEXTAREA"].indexOf(a.tagName) >= 0)) render();
   }, 60000);
-  $("addForm").addEventListener("submit", function (e) {
+  $("addForm").addEventListener("submit", async function (e) {
     e.preventDefault();
+    if (busy) return;
     var v = $("newText").value.trim();
     if (!v) return;
     if (!ready) { fail("Ainda carregando. Tente de novo em instantes."); return; }
     var cat = $("newCat").value, rep = $("newRepeat").value;
-    var tid = null;
-    addTask(v, cat, $("newPrio").value, rep, $("newDue").value || "", $("newNote").value.trim()).then(function (id) {
+    var btn = this.querySelector('button[type="submit"]');
+    busy = true; btn.disabled = true;
+    try {
+      var files = [];
+      if (picked.length && assetsApi) { btn.textContent = "Enviando anexos…"; files = await uploadAll(picked); }
+      var id = await addTask(v, cat, $("newPrio").value, rep, $("newDue").value || "", $("newNote").value.trim(), files);
       ok();
+      $("newText").value = ""; $("newRepeat").value = "none"; $("newDue").value = ""; $("newNote").value = ""; picked = [];
       if (filter !== "all" && filter !== cat) filter = "all";
-      highlight(rep === "none" ? id : (typeof id === "string" ? id : null), cat);
-    }, fail);
-    $("newText").value = "";
-    $("newRepeat").value = "none";
-    $("newDue").value = "";
-    $("newNote").value = "";
-    updateNote();
+      highlight(typeof id === "string" ? id : null, cat);
+    } catch (err) { fail(err && err.message ? err.message : undefined); }
+    busy = false; btn.disabled = false; btn.textContent = "Adicionar";
+    updateNote(); render();
     $("newText").focus();
   });
-  $("pickBtn").addEventListener("click", function () {
+  $("attachBtn").addEventListener("click", function () {
     pickFiles(function (list) {
       var errs = [];
       list.forEach(function (f) { var m = checkFile(f); if (m) errs.push(m); else picked.push(f); });
@@ -615,9 +676,8 @@
     var btn = $("remSubmit"); btn.disabled = true;
     try {
       var files = [];
-      if (picked.length && assetsApi) { btn.textContent = "Enviando anexos…"; files = await uploadAll(picked); }
       await store.add("rems", { text: v, time: $("remTime").value || "", date: current, done: false, createdAt: Date.now(), files: files });
-      $("remText").value = ""; $("remTime").value = ""; picked = [];
+      $("remText").value = ""; $("remTime").value = "";
       ok(); toast("Lembrete salvo em " + br(current) + (files.length ? " com " + plural(files.length, "anexo", "anexos") : "") + ".");
     } catch (err) { fail(err && err.message ? err.message : undefined); }
     busy = false; btn.disabled = false; btn.textContent = "Adicionar lembrete";
@@ -643,7 +703,8 @@
 
   function useLocal() {
     store = localStore; ready = true;
-    $("saveNote").textContent = "Salvo neste navegador (anexos indisponíveis)";
+    if (window.indexedDB) { assetsApi = localAssets; localFiles = true; }
+    $("saveNote").textContent = localFiles ? "Salvo neste navegador, anexos incluídos" : "Salvo neste navegador (anexos indisponíveis)";
     ensureDay(); render();
   }
 
